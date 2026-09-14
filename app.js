@@ -1,0 +1,70 @@
+
+let BOOKS=[];
+let LIBRARY_META={databaseVersion:'',updated:'',count:0};
+const PAGE=120; let limit=PAGE, currentView='all', activeBook=null, lastPickMode='filtered';
+const stateKey='tbrPrototypeStateV1'; let state={}; try{state=JSON.parse(localStorage.getItem(stateKey)||'{}')}catch(e){}
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+function save(){localStorage.setItem(stateKey,JSON.stringify(state)); updateStats();}
+function getState(id){return state[id]||{status:'tbr',priority:false}}
+function setState(id,patch){state[id]={...getState(id),...patch};save();render()}
+function splitTags(s){return (s||'').split(/[,;\n|]+/).map(x=>x.trim()).filter(Boolean)}
+function norm(s){return (s||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase()}
+function uniqueFacet(field){const m=new Map();BOOKS.forEach(b=>splitTags(b[field]).forEach(v=>{const k=norm(v);if(k&&!m.has(k))m.set(k,v)}));return [...m.values()].sort((a,b)=>a.localeCompare(b))}
+function isSeriesBook(b){return !!(b.series && norm(b.series)!=='standalone')}
+function seriesGroups(){const m=new Map();BOOKS.filter(isSeriesBook).forEach(b=>{let k=norm(b.series);if(!m.has(k))m.set(k,{name:b.series,books:[]});m.get(k).books.push(b)});return [...m.values()]}
+function unfinishedSeries(){return seriesGroups().filter(g=>g.books.some(b=>getState(b.id).status==='finished')&&g.books.some(b=>getState(b.id).status!=='finished'))}
+function newSeriesBooks(){let started=new Set(seriesGroups().filter(g=>g.books.some(b=>getState(b.id).status==='finished'||getState(b.id).status==='reading')).map(g=>norm(g.name)));return BOOKS.filter(b=>isSeriesBook(b)&&!started.has(norm(b.series))&&getState(b.id).status==='tbr')}
+function continueSeriesBooks(){let active=new Set(unfinishedSeries().map(g=>norm(g.name)));return BOOKS.filter(b=>isSeriesBook(b)&&active.has(norm(b.series))&&['tbr','reading'].includes(getState(b.id).status))}
+function standaloneBooks(){return BOOKS.filter(b=>(!b.series||norm(b.series)==='standalone')&&getState(b.id).status==='tbr')}
+function sample(arr,n=5){let a=[...arr];for(let i=a.length-1;i>0;i--){let j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a.slice(0,Math.min(n,a.length))}
+function initials(t){return (t||'?').split(/\s+/).filter(Boolean).slice(0,3).map(x=>x[0]).join('').toUpperCase()}
+function esc(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+function populate(){
+ const genres=uniqueFacet('genre');
+ const series=[...new Map(BOOKS.filter(b=>b.series&&norm(b.series)!=='standalone').map(b=>[norm(b.series),b.series])).values()].sort((a,b)=>a.localeCompare(b));
+ const tropes=uniqueFacet('tropes');
+ genres.forEach(x=>$('#genre').insertAdjacentHTML('beforeend',`<option>${esc(x)}</option>`)); tropes.forEach(x=>$('#trope').insertAdjacentHTML('beforeend',`<option>${esc(x)}</option>`)); series.forEach(x=>$('#series').insertAdjacentHTML('beforeend',`<option>${esc(x)}</option>`));
+}
+function filtered(){let q=norm($('#search').value.trim()), g=norm($('#genre').value), t=norm($('#trope').value), s=norm($('#series').value); let arr=BOOKS.filter(b=>{
+ const st=getState(b.id); if(currentView!=='all'&&currentView!=='unfinishedSeries'){if(currentView==='priority'){if(!st.priority)return false}else if(st.status!==currentView)return false}
+ if(g && !splitTags(b.genre).some(x=>norm(x)===g))return false; if(s && norm(b.series)!==s)return false; if(t && !splitTags(b.tropes).some(x=>norm(x)===t))return false;
+ if(q){let hay=norm([b.title,b.author,b.genre,b.tropes,b.simpleTags,b.series,b.summary].join(' ')); if(!hay.includes(q))return false} return true});
+ const sort=$('#sort').value; if(sort==='title')arr.sort((a,b)=>a.title.localeCompare(b.title)); else if(sort==='author')arr.sort((a,b)=>a.author.localeCompare(b.author)||a.title.localeCompare(b.title)); else if(sort==='series')arr.sort((a,b)=>(a.series||'ZZZ').localeCompare(b.series||'ZZZ')||(parseFloat(a.seriesNumber)||999)-(parseFloat(b.seriesNumber)||999)); else arr=arr.map(x=>[Math.random(),x]).sort((a,b)=>a[0]-b[0]).map(x=>x[1]); return arr}
+function render(){if(currentView==='unfinishedSeries'){renderUnfinishedSeries();updateStats();return} $('#seriesGrid').classList.add('hidden');$('#grid').classList.remove('hidden');$('#loadWrap').classList.remove('hidden'); const arr=filtered(); $('#resultCount').textContent=arr.length.toLocaleString(); const shown=arr.slice(0,limit); $('#visibleCount').textContent=arr.length>shown.length?`• showing ${shown.length.toLocaleString()}`:''; $('#loadMore').classList.toggle('hidden',shown.length>=arr.length); let html='';
+ for(const b of shown){let st=getState(b.id), chips=splitTags(b.tropes).slice(0,3); if(!chips.length && b.genre)chips=splitTags(b.genre).slice(0,3); const series=b.series && norm(b.series)!=='standalone'?`${esc(b.series)}${b.seriesNumber&&b.seriesNumber!=='–'?` • #${esc(b.seriesNumber)}`:''}`:(b.series?'Standalone':''); html+=`<article class="card"><div class="cover"><div class="initials">${esc(initials(b.title))}</div><div class="mini">${esc(b.title)}</div></div><div class="content"><h3 class="title">${esc(b.title)}</h3><div class="author">${esc(b.author||'Unknown author')}</div><div class="chips">${chips.map(x=>`<span class="chip">${esc(x)}</span>`).join('')}</div>${series?`<div class="series">📚 ${series}</div>`:''}<div class="cardfoot"><select class="status" data-status="${esc(b.id)}"><option value="tbr" ${st.status==='tbr'?'selected':''}>Want to Read</option><option value="reading" ${st.status==='reading'?'selected':''}>Reading</option><option value="finished" ${st.status==='finished'?'selected':''}>Finished</option><option value="dnf" ${st.status==='dnf'?'selected':''}>DNF</option></select><button class="details" data-id="${esc(b.id)}">Details ${st.priority?'★':''}</button></div></div></article>`}
+ $('#grid').innerHTML=html||'<div class="empty">No books match those filters.</div>'; $$('[data-status]').forEach(x=>x.onchange=e=>setState(e.target.dataset.status,{status:e.target.value})); $$('[data-id]').forEach(x=>x.onclick=e=>openBook(e.currentTarget.dataset.id)); updateStats();}
+function renderUnfinishedSeries(){const groups=unfinishedSeries().sort((a,b)=>a.name.localeCompare(b.name));$('#grid').classList.add('hidden');$('#seriesGrid').classList.remove('hidden');$('#loadWrap').classList.add('hidden');$('#resultCount').textContent=groups.length.toLocaleString();$('#visibleCount').textContent=' unfinished series';let html='';for(const g of groups){let sorted=[...g.books].sort((a,b)=>(parseFloat(a.seriesNumber)||999)-(parseFloat(b.seriesNumber)||999)||a.title.localeCompare(b.title));let done=sorted.filter(b=>getState(b.id).status==='finished').length;let remaining=sorted.length-done;html+=`<section class="seriesCard"><h3>${esc(g.name)}</h3><div class="seriesMeta">${done} finished • ${remaining} remaining • ${sorted.length} books in your library</div><div class="seriesBooks">${sorted.map(b=>`<div class="seriesBook"><button data-id="${esc(b.id)}">${getState(b.id).status==='finished'?'✓':'○'} ${b.seriesNumber&&b.seriesNumber!=='–'?`#${esc(b.seriesNumber)} `:''}${esc(b.title)}</button><span>${esc(b.author||'')}</span></div>`).join('')}</div></section>`}$('#seriesGrid').innerHTML=html||'<div class="empty">You do not have any unfinished series yet. Mark at least one book in a series Finished and this view will track the remaining books.</div>';$$('#seriesGrid [data-id]').forEach(x=>x.onclick=e=>openBook(e.currentTarget.dataset.id))}
+function updateStats(){let tbr=0,fin=0; BOOKS.forEach(b=>{let s=getState(b.id).status;if(s==='tbr')tbr++;if(s==='finished')fin++}); $('#totalStat').textContent=BOOKS.length.toLocaleString(); $('#tbrStat').textContent=tbr.toLocaleString(); $('#readStat').textContent=fin.toLocaleString(); $('#seriesStat').textContent=new Set(BOOKS.map(b=>norm(b.series)).filter(x=>x&&x!=='standalone')).size.toLocaleString()}
+function openBook(id){let b=BOOKS.find(x=>x.id===id);if(!b)return;activeBook=b;let st=getState(id); $('#mTitle').textContent=b.title;$('#mAuthor').textContent=b.author||'Unknown author';let meta=[];if(b.genre)meta.push(b.genre);if(b.series)meta.push(b.series+(b.seriesNumber&&b.seriesNumber!=='–'?` — Book ${b.seriesNumber}`:''));$('#mMeta').textContent=meta.join(' • ');$('#mChips').innerHTML=splitTags(b.tropes).map(x=>`<span class="chip">${esc(x)}</span>`).join('');$('#mSummary').textContent=b.summary||'No summary is currently available for this book.';$('#mStatus').value=st.status;$('#mPriority').textContent=st.priority?'★ Priority TBR':'☆ Priority';$('#modalBack').classList.add('open')}
+$('#closeModal').onclick=()=>$('#modalBack').classList.remove('open');$('#modalBack').onclick=e=>{if(e.target===e.currentTarget)e.currentTarget.classList.remove('open')};$('#mStatus').onchange=e=>{if(activeBook)setState(activeBook.id,{status:e.target.value})};$('#mPriority').onclick=()=>{if(activeBook){let p=!getState(activeBook.id).priority;setState(activeBook.id,{priority:p});$('#mPriority').textContent=p?'★ Priority TBR':'☆ Priority'}};
+function resetLimit(){limit=PAGE;render()} ['search','genre','trope','series','sort'].forEach(id=>$('#'+id).addEventListener(id==='search'?'input':'change',resetLimit));
+$('#clearBtn').onclick=()=>{$('#search').value='';$('#genre').value='';$('#trope').value='';$('#series').value='';$('#sort').value='title';limit=PAGE;render()};$('#loadMore').onclick=()=>{limit+=PAGE;render()};
+$$('.navbtn').forEach(b=>b.onclick=()=>{$$('.navbtn').forEach(x=>x.classList.remove('active'));b.classList.add('active');currentView=b.dataset.view;limit=PAGE;render()});
+function showPicks(arr,heading='Your 5 Picks',mode='filtered'){lastPickMode=mode;let picks=sample(arr,5);$('#randomHeading').textContent=heading;if(!picks.length){$('#pickGrid').innerHTML='<div class="empty">No books match this choice yet.</div>'}else{$('#pickGrid').innerHTML=picks.map((b,i)=>`<div class="pickcard"><h4>${i+1}. ${esc(b.title)}</h4><p>${esc(b.author||'Unknown author')}</p><p>${esc([b.genre,isSeriesBook(b)?b.series:'Standalone'].filter(Boolean).join(' • '))}</p><button class="btn primary" data-pick-id="${esc(b.id)}">View Details</button></div>`).join('');$$('[data-pick-id]').forEach(x=>x.onclick=e=>openBook(e.currentTarget.dataset.pickId))}$('#randomBox').classList.add('show');$('#randomBox').scrollIntoView({behavior:'smooth',block:'nearest'})}
+function pickFiltered(){let arr=filtered().filter(b=>getState(b.id).status==='tbr');if(!arr.length)arr=filtered().filter(b=>getState(b.id).status!=='finished'&&getState(b.id).status!=='dnf');showPicks(arr,'5 Books From Your Current Filters','filtered')}
+function runPickMode(mode){if(mode==='surprise')showPicks(BOOKS.filter(b=>getState(b.id).status==='tbr'),'5 Surprise Picks','surprise');else if(mode==='start')showPicks(newSeriesBooks(),'5 Series You Could Start','start');else if(mode==='continue')showPicks(continueSeriesBooks(),'5 Books to Continue a Series','continue');else if(mode==='standalone')showPicks(standaloneBooks(),'5 Standalone Picks','standalone');else if(mode==='priority')showPicks(BOOKS.filter(b=>getState(b.id).status==='tbr'&&getState(b.id).priority),'5 Picks From Your Priority TBR','priority');else pickFiltered()}
+$('#pickBtn').onclick=pickFiltered;$('#randomAgain').onclick=()=>runPickMode(lastPickMode);$('#surpriseBtn').onclick=()=>runPickMode('surprise');$('#startSeriesBtn').onclick=()=>runPickMode('start');$('#continueSeriesBtn').onclick=()=>runPickMode('continue');$('#standaloneBtn').onclick=()=>runPickMode('standalone');$('#priorityPickBtn').onclick=()=>runPickMode('priority');function showUnfinished(){currentView='unfinishedSeries';$$('.navbtn').forEach(x=>x.classList.toggle('active',x.dataset.view==='unfinishedSeries'));limit=PAGE;render()}$('#unfinishedSeriesBtn').onclick=showUnfinished;
+
+$('#exportBtn').onclick=()=>{let blob=new Blob([JSON.stringify({format:'my-tbr-progress',version:2,exportedAt:new Date().toISOString(),appVersion:'2.0',databaseVersion:LIBRARY_META.databaseVersion,libraryCount:BOOKS.length,state},null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='my-tbr-progress.json';a.click();URL.revokeObjectURL(a.href)};$('#importBtn').onclick=()=>$('#importFile').click();$('#importFile').onchange=e=>{let f=e.target.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{let obj=JSON.parse(r.result);state=obj.state||obj||{};save();render();alert('Progress imported successfully.')}catch(err){alert('That file could not be imported.')}};r.readAsText(f)};
+
+
+async function loadLibrary(){
+  try{
+    const response=await fetch('./books.json',{cache:'no-store'});
+    if(!response.ok) throw new Error('Could not load books.json ('+response.status+')');
+    const payload=await response.json();
+    BOOKS=Array.isArray(payload)?payload:(payload.books||[]);
+    LIBRARY_META=Array.isArray(payload)?{databaseVersion:'legacy',updated:'',count:BOOKS.length}:payload;
+    $('#dbVersion').textContent='Database '+(LIBRARY_META.databaseVersion||'')+' • '+BOOKS.length.toLocaleString()+' books';
+    $('#dbUpdated').textContent=LIBRARY_META.updated?'Updated '+LIBRARY_META.updated:'';
+    populate(); updateStats(); render();
+  }catch(err){
+    const box=$('#loadError');
+    box.textContent='The book database could not be loaded. If you just updated the app, refresh once while online. Details: '+err.message;
+    box.classList.add('show'); console.error(err);
+  }
+}
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(console.error));
+}
+loadLibrary();
